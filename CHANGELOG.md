@@ -2,6 +2,11 @@
 
 Todas las versiones notables de PrinklyPrint.js quedan documentadas acá. Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
+## [1.0.1] — 2026-05-23
+
+### Cambios internos
+- **CI/CD**: el pipeline de publicación migró a **OIDC Trusted Publishing** de npm. Ya no usamos un `NPM_TOKEN` de larga duración como secret de GitHub; cada release usa un token OIDC efímero firmado por GitHub Actions, verificado contra la confianza configurada en el paquete. No hay cambios visibles para los consumidores de la librería.
+
 ## [1.0.0] — 2026-05-23
 
 Primer release público de la librería cliente oficial del agente [PrinklyPrint](https://github.com/LautaroTiamat/PrinklyPrint).

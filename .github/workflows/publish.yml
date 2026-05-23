@@ -1,7 +1,14 @@
 # Build + publish a npm en cada tag vX.Y.Z.
 #
-# Requiere que en Settings → Secrets del repo esté seteado NPM_TOKEN
-# (un Automation Token de npm con permisos de publish para `prinklyprint.js`).
+# Autenticación: OIDC Trusted Publishing — NO usamos NPM_TOKEN.
+# La confianza se configura una sola vez en npm:
+#   Package → Settings → Trusted Publisher → GitHub Actions →
+#     LautaroTiamat/PrinklyPrint.js · publish.yml · Allow npm publish
+#
+# Cómo funciona: cuando el workflow corre, GitHub firma un token efímero
+# que dice "soy publish.yml del repo X corriendo el commit Y". npm verifica
+# esa firma contra la confianza configurada y autoriza el publish. El token
+# vive ~10 min y no se puede reusar. No hay secret en el repo.
 #
 # Para publicar una versión:
 #   1) Bumpeá "version" en package.json.
@@ -20,7 +27,7 @@ on:
 
 permissions:
   contents: write   # crear el GitHub Release
-  id-token: write   # provenance/atestación de npm
+  id-token: write   # ← clave: emite el OIDC token que npm valida
 
 jobs:
   publish:
@@ -33,6 +40,12 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
+
+      # Node 20 LTS viene con npm 10.x. OIDC Trusted Publishing requiere
+      # npm 11.5.1+ (la integración con GitHub OIDC se agregó ahí).
+      # Forzamos la última versión estable.
+      - name: Upgrade npm to support OIDC trusted publishing
+        run: npm install -g npm@latest
 
       - name: Validate tag matches package.json version
         run: |
@@ -48,10 +61,12 @@ jobs:
       - run: npm run build
       - run: npm test --if-present
 
-      - name: Publish to npm
+      # Sin NODE_AUTH_TOKEN: npm CLI 11.5+ detecta el entorno de GitHub
+      # Actions con id-token:write y solicita el token OIDC automáticamente.
+      # --provenance es redundante con OIDC (ya viene firmado) pero lo
+      # dejamos por explicit-ness.
+      - name: Publish to npm (via OIDC)
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Extract changelog for this version
         id: changelog
