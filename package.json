@@ -1,0 +1,79 @@
+{
+  "name": "prinklyprint.js",
+  "version": "1.0.0",
+  "description": "Cliente JavaScript/TypeScript oficial del agente PrinklyPrint. Imprimí PDFs desde tu web sin diálogos del navegador. Soporte para vanilla JS, React y TypeScript.",
+  "keywords": [
+    "printing",
+    "pdf",
+    "silent-print",
+    "print-agent",
+    "prinklyprint",
+    "react",
+    "typescript",
+    "pos",
+    "thermal-printer"
+  ],
+  "author": "LautaroTiamat <https://github.com/LautaroTiamat>",
+  "license": "MIT",
+  "homepage": "https://github.com/LautaroTiamat/PrinklyPrint.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LautaroTiamat/PrinklyPrint.js.git"
+  },
+  "bugs": {
+    "url": "https://github.com/LautaroTiamat/PrinklyPrint.js/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js",
+      "require": "./dist/react.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run typecheck && npm run build"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.2.0",
+    "react": "^18.2.0",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

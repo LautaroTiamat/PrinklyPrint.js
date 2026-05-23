@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>PrinklyPrint.js — ejemplo vanilla</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { color: #ec4899; }
+    button { padding: 0.6rem 1.2rem; font-size: 1rem; cursor: pointer; border: 1px solid #ddd; border-radius: 6px; background: #fff; }
+    button:hover { background: #f9f9f9; }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    .status { padding: 0.5rem 1rem; border-radius: 6px; margin-top: 1rem; }
+    .status.ok { background: #d1fae5; color: #065f46; }
+    .status.error { background: #fee2e2; color: #991b1b; }
+    pre { background: #f3f4f6; padding: 1rem; border-radius: 6px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+
+<h1>PrinklyPrint.js — ejemplo vanilla</h1>
+
+<p>Esta página muestra cómo usar la librería desde HTML+JS puro, sin ningún
+bundler ni framework. Asume que el agente PrinklyPrint está corriendo en
+<code>127.0.0.1:17777</code>.</p>
+
+<button id="ping-btn">Verificar conexión con el agente</button>
+<button id="print-btn">Imprimir PDF de prueba</button>
+
+<div id="status"></div>
+<pre id="output"></pre>
+
+<!--
+  Para producción, importás desde npm:
+    import { PrinklyPrint } from 'https://esm.sh/prinklyprint.js';
+
+  Acá usamos un import relativo a `../dist/` para poder probar local sin npm.
+  Hacé `npm install && npm run build` primero para que ese path exista.
+-->
+<script type="module">
+  import { PrinklyPrint, AgentUnreachableError } from '../dist/index.js';
+
+  const printer = new PrinklyPrint();
+  const statusEl = document.getElementById('status');
+  const outputEl = document.getElementById('output');
+
+  function setStatus(msg, ok) {
+    statusEl.className = 'status ' + (ok ? 'ok' : 'error');
+    statusEl.textContent = msg;
+  }
+
+  document.getElementById('ping-btn').addEventListener('click', async () => {
+    try {
+      const info = await printer.ping();
+      setStatus(`✓ Agente OK (v${info.version}, machine ${info.machine_id.slice(0, 8)})`, true);
+      outputEl.textContent = JSON.stringify(info, null, 2);
+    } catch (err) {
+      if (err instanceof AgentUnreachableError) {
+        setStatus('✗ PrinklyPrint no está corriendo en esta PC.', false);
+      } else {
+        setStatus('✗ Error: ' + err.message, false);
+      }
+      outputEl.textContent = '';
+    }
+  });
+
+  document.getElementById('print-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('print-btn');
+    btn.disabled = true;
+    try {
+      // Para el demo construimos un PDF mínimo en base64 (en una app real
+      // descargarías el PDF con `fetch().blob()`).
+      const minimalPDFBase64 =
+        'JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9MZW5ndGggMzM+PnN0cmVhbQpCVCAvRjEgMTIgVGYg' +
+        'MTAwIDcwMCBUZCAoVGVzdCkgVGogRVQKZW5kc3RyZWFtCmVuZG9iagoxIDAgb2JqCjw8L1R5cGUv' +
+        'UGFnZS9QYXJlbnQgMiAwIFIvUmVzb3VyY2VzPDwvRm9udDw8L0YxIDQgMCBSPj4+Pi9Db250ZW50' +
+        'cyAzIDAgUi9NZWRpYUJveFswIDAgNjEyIDc5Ml0+PgplbmRvYmoKMiAwIG9iago8PC9UeXBlL1Bh' +
+        'Z2VzL0NvdW50IDEvS2lkc1sxIDAgUl0+PgplbmRvYmoKNCAwIG9iago8PC9UeXBlL0ZvbnQvU3Vi' +
+        'dHlwZS9UeXBlMS9CYXNlRm9udC9IZWx2ZXRpY2E+PgplbmRvYmoKNSAwIG9iago8PC9UeXBlL0Nh' +
+        'dGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmCjAw' +
+        'MDAwMDAwODggMDAwMDAgbgowMDAwMDAwMjA0IDAwMDAwIG4KMDAwMDAwMDAxNSAwMDAwMCBuCjAw' +
+        'MDAwMDAyNDcgMDAwMDAgbgowMDAwMDAwMzEwIDAwMDAwIG4KdHJhaWxlcgo8PC9TaXplIDYvUm9v' +
+        'dCA1IDAgUj4+CnN0YXJ0eHJlZgozNTQKJSVFT0Y=';
+
+      const result = await printer.printBase64(minimalPDFBase64, {
+        filename: 'test-vanilla.pdf',
+        metadata: { source: 'vanilla-demo' },
+      });
+      setStatus('✓ Job encolado: ' + result.job_id, true);
+      outputEl.textContent = JSON.stringify(result, null, 2);
+    } catch (err) {
+      setStatus('✗ Error: ' + err.message, false);
+      outputEl.textContent = err.stack || '';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+</script>
+
+</body>
+</html>

@@ -1,0 +1,70 @@
+# Build + publish a npm en cada tag vX.Y.Z.
+#
+# Requiere que en Settings → Secrets del repo esté seteado NPM_TOKEN
+# (un Automation Token de npm con permisos de publish para `prinklyprint.js`).
+#
+# Para publicar una versión:
+#   1) Bumpeá "version" en package.json.
+#   2) Agregá la entry al CHANGELOG.md.
+#   3) git tag v1.1.0 && git push origin v1.1.0
+#
+# El workflow valida que el tag matchee la version del package.json para
+# evitar drift entre lo publicado y lo etiquetado.
+
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # crear el GitHub Release
+  id-token: write   # provenance/atestación de npm
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Validate tag matches package.json version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "Tag $TAG_VERSION no coincide con package.json $PKG_VERSION"
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test --if-present
+
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v v="## [$VERSION]" '
+            $0 ~ "^## \\[" { if (found) exit; if (index($0, v)) { found=1; next } }
+            found { print }
+          ' CHANGELOG.md > release-notes.md || echo "Release $VERSION" > release-notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: PrinklyPrint.js v${{ github.ref_name }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: false
