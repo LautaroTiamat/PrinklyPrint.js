@@ -88,7 +88,13 @@ export class PrinklyPrint {
         'No hay fetch disponible en este entorno. Pasá uno explícito en PrinklyPrintConfig.fetch.',
       );
     }
-    this.fetchImpl = resolvedFetch;
+    // Bind explícito a globalThis para evitar "Illegal invocation" cuando lo
+    // invocamos como `this.fetchImpl(...)`. El navegador requiere que el `this`
+    // de fetch sea window (o globalThis); guardarlo como property del cliente
+    // hace que el call-site pase la instancia como `this`, lo cual el browser
+    // rechaza. .bind(globalThis) fija el contexto permanentemente y funciona
+    // en browser (window), workers (self), Node ≥18 y Deno/Bun (global).
+    this.fetchImpl = resolvedFetch.bind(globalThis);
   }
 
   // ───────────────────────────────────────────────────────────────────

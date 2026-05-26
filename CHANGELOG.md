@@ -2,6 +2,12 @@
 
 Todas las versiones notables de PrinklyPrint.js quedan documentadas acá. Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
+## [1.0.2] — 2026-05-23
+
+### Corregido
+- **`Illegal invocation` al llamar a `fetch` desde el navegador**. La librería guardaba la referencia a `fetch` como propiedad de la instancia y luego la invocaba como método (`this.fetchImpl(...)`), lo cual hacía que el navegador recibiera la instancia de `PrinklyPrint` como `this` en lugar de `window`. El navegador exige que el `this` de `fetch` sea el global object y rechaza la llamada con `TypeError: Failed to execute 'fetch' on 'Window': Illegal invocation`. El síntoma era que toda llamada (ping, print, listPrinters, etc.) terminaba en `AgentUnreachableError` aunque el agente estuviera funcionando.
+- **Fix**: ahora bindemos `fetch` a `globalThis` al construir el cliente. Funciona en browser (`window`), web workers (`self`), Node ≥18 y Deno/Bun (`global`). Backward-compatible: quienes ya estaban pasando un `fetch` bindeado manualmente como workaround pueden mantener su código sin cambios.
+
 ## [1.0.1] — 2026-05-23
 
 ### Cambios internos
