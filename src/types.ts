@@ -105,8 +105,6 @@ export interface PingResponse {
   ok: true;
   /** Versión del agente PrinklyPrint instalado en la PC del operador. */
   version: string;
-  /** Identificador estable de la PC (hash de hostname + dataDir). */
-  machine_id: string;
   /** Si el operador puso la cola en pausa, no se procesan nuevos jobs. */
   paused: boolean;
 }
@@ -157,6 +155,11 @@ export interface AgentSettings {
   duplex: Duplex;
   scale: Scale;
   paused: boolean;
+  /**
+   * Identificador estable de la PC (hash de hostname + dataDir). Se obtiene acá
+   * (endpoint autenticado); el agente dejó de exponerlo en `/ping`.
+   */
+  machine_id: string;
 }
 
 /**

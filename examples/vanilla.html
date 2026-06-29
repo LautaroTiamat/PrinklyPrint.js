@@ -85,7 +85,7 @@ agente pidiendo autorización). También podés dispararlo a mano con el botón
   document.getElementById('ping-btn').addEventListener('click', async () => {
     try {
       const info = await printer.ping();
-      setStatus(`✓ Agente OK (v${info.version}, machine ${info.machine_id.slice(0, 8)})`, true);
+      setStatus(`✓ Agente OK (v${info.version})`, true);
       outputEl.textContent = JSON.stringify(info, null, 2);
     } catch (err) {
       setStatus(explicar(err), false);

@@ -50,7 +50,7 @@ function newAgent(opts: { token?: string; approve?: boolean } = {}) {
   const token = opts.token ?? 'tok-abc';
   const approve = opts.approve ?? true;
   return (path: string, call: Call): Response => {
-    if (path === '/ping') return json(200, { ok: true, version: '1.1.0', machine_id: 'm', paused: false });
+    if (path === '/ping') return json(200, { ok: true, version: '1.1.0', paused: false });
     if (path === '/pair') {
       return approve ? json(200, { token }) : json(403, { error: 'pairing_denied', message: 'rechazado' });
     }
@@ -66,7 +66,7 @@ function newAgent(opts: { token?: string; approve?: boolean } = {}) {
 /** Agente VIEJO: nunca exige token, nunca devuelve 401, no tiene /pair. */
 function oldAgent() {
   return (path: string): Response => {
-    if (path === '/ping') return json(200, { ok: true, version: '1.0.0', machine_id: 'm', paused: false });
+    if (path === '/ping') return json(200, { ok: true, version: '1.0.0', paused: false });
     if (path === '/jobs') return json(200, { total: 0, limit: 0, offset: 0, jobs: [] });
     if (path === '/print') return json(202, { job_id: 'j', status: 'queued' });
     if (path === '/pair') return json(404, { error: 'not_found', message: 'agente viejo sin pairing' });

@@ -2,6 +2,20 @@
 
 Todas las versiones notables de PrinklyPrint.js quedan documentadas acá. Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
+## [2.1.0] — 2026-06-29
+
+### Corregido
+- **`PingResponse` ya no declara `machine_id`**, alineado con el agente que dejó de
+  devolverlo en `GET /ping` (se movió a `GET /settings`, autenticado). **Nota:** si
+  tu código TypeScript leía `ping.machine_id`, dejará de compilar; ya recibías
+  `undefined` en runtime, así que no había dato real que perder. Sin otros cambios
+  de comportamiento.
+
+### Cambiado
+- **`AgentSettings`** (respuesta de `GET /settings`) ahora incluye `machine_id`:
+  es donde el agente expone ese identificador a partir de ahora. Si necesitás el
+  `machine_id`, obtenelo con `getSettings()`.
+
 ## [2.0.0] — 2026-06-29
 
 **BREAKING CHANGE.** Se eliminó `printFromUrl()` y el campo `pdf_url` del request. El agente PrinklyPrint ya no descarga PDFs desde una URL remota: ahora el PDF se manda **siempre inline** (base64) vía `print()` / `printBase64()`.
