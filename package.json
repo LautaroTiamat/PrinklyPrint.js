@@ -1,6 +1,6 @@
 {
   "name": "prinklyprint.js",
-  "version": "1.0.2",
+  "version": "2.0.0",
   "description": "Cliente JavaScript/TypeScript oficial del agente PrinklyPrint. Imprimí PDFs desde tu web sin diálogos del navegador. Soporte para vanilla JS, React y TypeScript.",
   "keywords": [
     "printing",

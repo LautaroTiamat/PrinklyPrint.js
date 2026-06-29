@@ -9,9 +9,23 @@
  *   `{data, error, isLoading, refresh}` y soportan polling configurable.
  * - Hook de **acción** (`usePrint`) — devuelve `{print, isLoading, error, data}`
  *   y maneja el estado de la mutación.
+ * - Hook de **pairing** (`usePairing`) — devuelve `{pair, isLoading, error, isPaired}`
+ *   para autorizar la app contra el agente con tu propia UX.
  *
  * React es **peerDependency opcional**: la librería core funciona sin él. Solo
  * pagás React si importás desde este entry point.
+ *
+ * ## Pairing y diálogo nativo
+ *
+ * El agente exige un token bearer por instalación. Con el default `autoPair: true`,
+ * la **primera acción** (`print`, `useJobs`, etc.) contra un agente no pareado
+ * dispara el handshake automáticamente: el agente puede mostrar un **diálogo
+ * nativo** pidiéndole al operador que autorice la app, así que esa primera
+ * llamada **puede tardar** (espera la aprobación). Preparate para mostrar un
+ * estado tipo "Esperando aprobación en PrinklyPrint…". Si el operador rechaza,
+ * los hooks exponen un `PairingDeniedError` en su campo `error`. Con
+ * `autoPair: false`, en vez de parear solo, los hooks exponen `PairingRequiredError`
+ * y vos disparás `usePairing().pair()` desde un botón "Conectar con PrinklyPrint".
  *
  * @example
  * ```tsx
@@ -108,10 +122,24 @@ export function PrinklyPrintProvider(props: PrinklyPrintProviderProps) {
 
   // Estabilizamos la instancia por valor de config — comparación shallow.
   // Si pasás `client` directamente, lo respetamos sin envolver.
+  // tokenStore y fetch se comparan por identidad referencial: si los pasás,
+  // memoizalos (o aceptá que una referencia nueva recrea el cliente). El resto
+  // son primitivos (comparación shallow).
   const instance = useMemo(() => {
     if (client) return client;
     return new PrinklyPrint(config);
-  }, [client, config?.baseUrl, config?.host, config?.port, config?.timeout, config?.fetch]);
+  }, [
+    client,
+    config?.baseUrl,
+    config?.host,
+    config?.port,
+    config?.timeout,
+    config?.fetch,
+    config?.appName,
+    config?.tokenStore,
+    config?.pairingTimeout,
+    config?.autoPair,
+  ]);
 
   return createElement(PrinklyPrintContext.Provider, { value: instance }, children);
 }
@@ -285,7 +313,7 @@ export interface PrintMutationState {
    */
   print: (
     pdf: PrintablePDF,
-    req?: Omit<PrintRequest, 'pdf_base64' | 'pdf_url'>,
+    req?: Omit<PrintRequest, 'pdf_base64'>,
   ) => Promise<PrintResponse>;
 
   /** `true` mientras la request HTTP está en vuelo. */
@@ -339,7 +367,7 @@ export function usePrint(): PrintMutationState {
   }, []);
 
   const print = useCallback(
-    async (pdf: PrintablePDF, req?: Omit<PrintRequest, 'pdf_base64' | 'pdf_url'>) => {
+    async (pdf: PrintablePDF, req?: Omit<PrintRequest, 'pdf_base64'>) => {
       setIsLoading(true);
       try {
         const result = await client.print(pdf, req);
@@ -366,4 +394,98 @@ export function usePrint(): PrintMutationState {
   }, []);
 
   return { print, isLoading, data, error, reset };
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Hook de pairing
+// ─────────────────────────────────────────────────────────────────────
+
+/** Estado del hook `usePairing`. */
+export interface PairingState {
+  /**
+   * Dispara el pairing manualmente (`POST /pair`). Resuelve con el token.
+   * La promesa puede tardar: el agente puede mostrar un diálogo nativo y
+   * esperar a que el operador apruebe.
+   *
+   * @throws {PairingDeniedError} si el operador/agente rechaza el pareo.
+   */
+  pair: () => Promise<string>;
+  /** `true` mientras el pairing está en vuelo (incluye esperar el diálogo). */
+  isLoading: boolean;
+  /** Último error de pairing (`PairingDeniedError`, `AgentUnreachableError`, …). */
+  error: Error | null;
+  /** `true` si ya hay un token cacheado para el agente actual. */
+  isPaired: boolean;
+}
+
+/**
+ * Hook para manejar el pairing con tu propia UX. Útil sobre todo con
+ * `autoPair: false`, o para ofrecer un botón "Conectar con PrinklyPrint"
+ * explícito y un reintento tras un `PairingDeniedError`.
+ *
+ * `isPaired` se mantiene sincronizado: refleja el token cacheado al montar y se
+ * actualiza ante cualquier cambio de pairing, incluido el auto-pairing que
+ * disparan otros hooks (`autoPair: true`) — el hook se suscribe a esos cambios.
+ *
+ * @example
+ * ```tsx
+ * function ConnectButton() {
+ *   const { pair, isLoading, error, isPaired } = usePairing();
+ *   if (isPaired) return <span>🟢 Conectado a PrinklyPrint</span>;
+ *   return (
+ *     <>
+ *       <button onClick={() => pair().catch(() => {})} disabled={isLoading}>
+ *         {isLoading ? 'Esperando aprobación…' : 'Conectar con PrinklyPrint'}
+ *       </button>
+ *       {error && <p style={{ color: 'red' }}>{error.message}</p>}
+ *     </>
+ *   );
+ * }
+ * ```
+ */
+export function usePairing(): PairingState {
+  const client = usePrinklyPrint();
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const [isPaired, setIsPaired] = useState<boolean>(() => client.isPaired());
+  const aliveRef = useRef(true);
+
+  useEffect(() => {
+    aliveRef.current = true;
+    // Resincronizar al montar / cambiar de cliente, y suscribirse a cambios de
+    // pairing para reflejar también los pareos automáticos (autoPair) que
+    // ocurren desde otros hooks.
+    setIsPaired(client.isPaired());
+    const unsubscribe = client.onPairingChange(() => {
+      if (aliveRef.current) setIsPaired(client.isPaired());
+    });
+    return () => {
+      aliveRef.current = false;
+      unsubscribe();
+    };
+  }, [client]);
+
+  const pair = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const token = await client.pair();
+      if (aliveRef.current) {
+        setError(null);
+        setIsPaired(true);
+      }
+      return token;
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error(String(err));
+      if (aliveRef.current) {
+        setError(e);
+        setIsPaired(client.isPaired());
+      }
+      // Re-lanzamos para que el caller pueda await pair() y manejar el error.
+      throw e;
+    } finally {
+      if (aliveRef.current) setIsLoading(false);
+    }
+  }, [client]);
+
+  return { pair, isLoading, error, isPaired };
 }

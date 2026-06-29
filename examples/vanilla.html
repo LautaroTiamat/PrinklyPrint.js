@@ -24,6 +24,12 @@
 bundler ni framework. Asume que el agente PrinklyPrint está corriendo en
 <code>127.0.0.1:17777</code>.</p>
 
+<p><strong>Pairing:</strong> el agente exige un token por instalación. La librería
+lo obtiene sola la primera vez que imprimís (podés ver el diálogo nativo del
+agente pidiendo autorización). También podés dispararlo a mano con el botón
+"Conectar".</p>
+
+<button id="pair-btn">Conectar con PrinklyPrint</button>
 <button id="ping-btn">Verificar conexión con el agente</button>
 <button id="print-btn">Imprimir PDF de prueba</button>
 
@@ -38,9 +44,10 @@ bundler ni framework. Asume que el agente PrinklyPrint está corriendo en
   Hacé `npm install && npm run build` primero para que ese path exista.
 -->
 <script type="module">
-  import { PrinklyPrint, AgentUnreachableError } from '../dist/index.js';
+  import { PrinklyPrint, AgentUnreachableError, PairingDeniedError } from '../dist/index.js';
 
-  const printer = new PrinklyPrint();
+  // appName se muestra en el diálogo nativo de aprobación del agente.
+  const printer = new PrinklyPrint({ appName: 'Demo Vanilla PrinklyPrint' });
   const statusEl = document.getElementById('status');
   const outputEl = document.getElementById('output');
 
@@ -49,17 +56,39 @@ bundler ni framework. Asume que el agente PrinklyPrint está corriendo en
     statusEl.textContent = msg;
   }
 
+  // Traduce los errores comunes a un mensaje claro para el usuario.
+  function explicar(err) {
+    if (err instanceof AgentUnreachableError) {
+      return '✗ PrinklyPrint no está corriendo en esta PC.';
+    }
+    if (err instanceof PairingDeniedError) {
+      return '✗ El operador no autorizó esta app. Aprobala desde el ícono de PrinklyPrint.';
+    }
+    return '✗ Error: ' + err.message;
+  }
+
+  // Botón explícito de pairing (opcional: la impresión también paréa sola).
+  document.getElementById('pair-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('pair-btn');
+    btn.disabled = true;
+    setStatus('Esperando aprobación en PrinklyPrint…', true);
+    try {
+      await printer.pair();
+      setStatus('✓ Conectado: esta app quedó autorizada a imprimir.', true);
+    } catch (err) {
+      setStatus(explicar(err), false);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   document.getElementById('ping-btn').addEventListener('click', async () => {
     try {
       const info = await printer.ping();
       setStatus(`✓ Agente OK (v${info.version}, machine ${info.machine_id.slice(0, 8)})`, true);
       outputEl.textContent = JSON.stringify(info, null, 2);
     } catch (err) {
-      if (err instanceof AgentUnreachableError) {
-        setStatus('✗ PrinklyPrint no está corriendo en esta PC.', false);
-      } else {
-        setStatus('✗ Error: ' + err.message, false);
-      }
+      setStatus(explicar(err), false);
       outputEl.textContent = '';
     }
   });
@@ -67,6 +96,8 @@ bundler ni framework. Asume que el agente PrinklyPrint está corriendo en
   document.getElementById('print-btn').addEventListener('click', async () => {
     const btn = document.getElementById('print-btn');
     btn.disabled = true;
+    // Si es la primera vez, esto puede disparar el diálogo de aprobación del agente.
+    setStatus('Enviando… (si aparece un diálogo en PrinklyPrint, aprobalo)', true);
     try {
       // Para el demo construimos un PDF mínimo en base64 (en una app real
       // descargarías el PDF con `fetch().blob()`).
@@ -89,7 +120,7 @@ bundler ni framework. Asume que el agente PrinklyPrint está corriendo en
       setStatus('✓ Job encolado: ' + result.job_id, true);
       outputEl.textContent = JSON.stringify(result, null, 2);
     } catch (err) {
-      setStatus('✗ Error: ' + err.message, false);
+      setStatus(explicar(err), false);
       outputEl.textContent = err.stack || '';
     } finally {
       btn.disabled = false;

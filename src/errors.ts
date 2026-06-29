@@ -101,3 +101,45 @@ export class TimeoutError extends PrinklyPrintError {
     );
   }
 }
+
+/**
+ * El pairing fue rechazado por el agente: el operador apretó "Denegar" en el
+ * diálogo nativo, o el agente corre en modo headless sin el origen pre-aprobado.
+ *
+ * Se lanza cuando `POST /pair` devuelve `403`. No tiene sentido reintentar
+ * automáticamente (no es un error transitorio): mostrale al usuario un mensaje
+ * pidiéndole que autorice la app desde el ícono de PrinklyPrint.
+ */
+export class PairingDeniedError extends PrinklyPrintError {
+  override readonly name = 'PairingDeniedError';
+
+  constructor(
+    public readonly body?: AgentErrorBody,
+    public readonly baseUrl?: string,
+  ) {
+    super(
+      body?.message ||
+        'El operador no autorizó esta app para imprimir en su PC. ' +
+          'Pedile que apruebe la impresión desde el ícono de PrinklyPrint.',
+    );
+  }
+}
+
+/**
+ * Hace falta parear pero `autoPair` está en `false`, así que la librería NO
+ * paréa sola ante un `401`. Capturá este error y llamá a `client.pair()` con tu
+ * propia UX (por ejemplo, un botón "Conectar con PrinklyPrint").
+ *
+ * Solo se lanza cuando `autoPair: false`. Con el default (`autoPair: true`) la
+ * librería paréa y reintenta de forma transparente.
+ */
+export class PairingRequiredError extends PrinklyPrintError {
+  override readonly name = 'PairingRequiredError';
+
+  constructor(public readonly baseUrl?: string) {
+    super(
+      'El agente requiere pairing pero autoPair está deshabilitado. ' +
+        'Llamá a client.pair() (o usePairing().pair) para autorizar esta app.',
+    );
+  }
+}

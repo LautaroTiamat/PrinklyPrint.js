@@ -13,24 +13,50 @@ import { useState } from 'react';
 import {
   PrinklyPrintProvider,
   useJobs,
+  usePairing,
   usePing,
   usePrint,
   usePrinters,
 } from 'prinklyprint.js/react';
 
 // ─── 1) Envolvemos toda la app con el Provider ──────────────────────
+// `appName` se muestra en el diálogo nativo de aprobación del agente.
 export default function App() {
   return (
-    <PrinklyPrintProvider config={{ port: 17777 }}>
+    <PrinklyPrintProvider config={{ port: 17777, appName: 'Dashboard Demo' }}>
       <main style={{ fontFamily: 'system-ui', maxWidth: 800, margin: '2rem auto' }}>
         <h1 style={{ color: '#ec4899' }}>PrinklyPrint Dashboard</h1>
         <ConnectionStatus />
+        <PairingBanner />
         <PrinterPicker />
         <PrintForm />
         <hr style={{ margin: '2rem 0' }} />
         <QueueMonitor />
       </main>
     </PrinklyPrintProvider>
+  );
+}
+
+// ─── 1b) Banner de pairing ──────────────────────────────────────────
+// Con autoPair (default) la primera impresión paréa sola; este botón es
+// opcional, para autorizar de forma explícita y reaccionar a un rechazo.
+function PairingBanner() {
+  const { pair, isLoading, error, isPaired } = usePairing();
+
+  if (isPaired) {
+    return (
+      <div style={{ background: '#d1fae5', color: '#065f46', padding: '0.75rem', marginTop: '0.5rem' }}>
+        🔑 App autorizada para imprimir en esta PC.
+      </div>
+    );
+  }
+  return (
+    <div style={{ background: '#eef2ff', color: '#3730a3', padding: '0.75rem', marginTop: '0.5rem' }}>
+      <button onClick={() => void pair().catch(() => {})} disabled={isLoading}>
+        {isLoading ? 'Esperando aprobación en PrinklyPrint…' : 'Conectar con PrinklyPrint'}
+      </button>
+      {error && <span style={{ color: '#991b1b', marginLeft: '0.75rem' }}>✗ {error.message}</span>}
+    </div>
   );
 }
 

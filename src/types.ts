@@ -8,6 +8,8 @@
  * @module
  */
 
+import type { TokenStore } from './tokenStore.js';
+
 /**
  * Configuración del cliente al instanciar `PrinklyPrint`.
  */
@@ -57,6 +59,43 @@ export interface PrinklyPrintConfig {
    * @default globalThis.fetch
    */
   fetch?: typeof fetch;
+
+  /**
+   * Etiqueta amigable de tu app. El agente la muestra en el diálogo nativo de
+   * aprobación de pairing ("¿Permitir que <appName> imprima en esta PC?"), así
+   * el operador reconoce qué aplicación está pidiendo permiso. Recomendado.
+   *
+   * @example 'Sistema de Facturación'
+   */
+  appName?: string;
+
+  /**
+   * Store donde se cachea el token de pairing (uno por agente/baseUrl). Por
+   * default usa `localStorage` en el browser (con fallback a memoria si no está
+   * disponible). Pasá uno custom para persistir en Node u otro backend.
+   *
+   * @default LocalStorageTokenStore (o memoria si no hay localStorage)
+   */
+  tokenStore?: TokenStore;
+
+  /**
+   * Timeout en ms específico para la llamada `POST /pair`. Es más largo que el
+   * `timeout` normal porque el agente puede mostrar un diálogo y esperar a que
+   * el operador apruebe manualmente.
+   *
+   * @default 120000 (2 minutos)
+   */
+  pairingTimeout?: number;
+
+  /**
+   * Si es `true` (default), ante un `401` la librería paréa automáticamente y
+   * reintenta el request original de forma transparente. Si es `false`, un
+   * `401` lanza `PairingRequiredError` y vos disparás `client.pair()` con tu
+   * propia UX (botón "Conectar con PrinklyPrint", etc.).
+   *
+   * @default true
+   */
+  autoPair?: boolean;
 }
 
 /**
@@ -120,8 +159,12 @@ export interface AgentSettings {
   paused: boolean;
 }
 
-/** Tamaño de papel soportado por SumatraPDF más una opción Custom. */
-export type PaperSize = 'A4' | 'Letter' | 'Legal' | 'A5' | 'Custom' | string;
+/**
+ * Tamaño de papel soportado por SumatraPDF más una opción Custom.
+ * `(string & {})` preserva el autocompletado de los literales sin restringir el
+ * valor a ellos (un `| string` pelado colapsaría la unión a `string`).
+ */
+export type PaperSize = 'A4' | 'Letter' | 'Legal' | 'A5' | 'Custom' | (string & {});
 
 export type Orientation = 'portrait' | 'landscape';
 
@@ -174,15 +217,16 @@ export interface PrintOptions {
 /**
  * Cuerpo de una request `POST /print`.
  *
- * Tenés que pasar `pdf_base64` O `pdf_url` (exactamente uno). Las helpers
- * `print()`, `printBase64()` y `printFromUrl()` se encargan de armar esto
- * por vos.
+ * El PDF se manda siempre inline en `pdf_base64`. Las helpers `print()` y
+ * `printBase64()` se encargan de armar esto por vos.
+ *
+ * Nota: `pdf_url` (descarga remota por el agente) fue **removido** en la v2 por
+ * seguridad — cerraba una superficie de SSRF. Generá/obtené el PDF en tu app y
+ * mandalo con `print(blob)` o `printBase64(...)`.
  */
 export interface PrintRequest {
   /** PDF codificado en base64 (sin el prefijo `data:application/pdf;base64,`). */
   pdf_base64?: string;
-  /** URL pública que el agente va a descargar y luego imprimir. */
-  pdf_url?: string;
   /** Nombre amigable para mostrar en la cola. Recomendado siempre setearlo. */
   filename?: string;
   options?: PrintOptions;

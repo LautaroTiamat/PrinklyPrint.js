@@ -46,7 +46,16 @@ export {
   AgentUnreachableError,
   AgentResponseError,
   TimeoutError,
+  PairingDeniedError,
+  PairingRequiredError,
 } from './errors.js';
+
+export {
+  MemoryTokenStore,
+  LocalStorageTokenStore,
+  defaultTokenStore,
+} from './tokenStore.js';
+export type { TokenStore } from './tokenStore.js';
 
 export type {
   AgentErrorBody,

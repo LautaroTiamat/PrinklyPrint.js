@@ -14,8 +14,11 @@
 import {
   AgentResponseError,
   AgentUnreachableError,
+  PairingDeniedError,
+  PairingRequiredError,
   TimeoutError,
 } from './errors.js';
+import { defaultTokenStore, type TokenStore } from './tokenStore.js';
 import { normalizeHost, toBase64 } from './utils.js';
 import type {
   AgentErrorBody,
@@ -69,9 +72,27 @@ export class PrinklyPrint {
 
   private readonly timeout: number;
   private readonly fetchImpl: typeof fetch;
+  private readonly appName?: string;
+  private readonly tokenStore: TokenStore;
+  private readonly pairingTimeout: number;
+  private readonly autoPair: boolean;
+  /** Promise del pair() en vuelo, para deduplicar pareos concurrentes. */
+  private pairPromise: Promise<string> | null = null;
+  /** Listeners notificados cuando se cachea o limpia el token (pairing). */
+  private readonly pairingListeners = new Set<() => void>();
 
   constructor(config: PrinklyPrintConfig = {}) {
-    const { host = '127.0.0.1', port = 17777, baseUrl, timeout = 30_000, fetch: fetchImpl } = config;
+    const {
+      host = '127.0.0.1',
+      port = 17777,
+      baseUrl,
+      timeout = 30_000,
+      fetch: fetchImpl,
+      appName,
+      tokenStore,
+      pairingTimeout = 120_000,
+      autoPair = true,
+    } = config;
 
     if (baseUrl) {
       this.baseUrl = baseUrl.replace(/\/$/, '');
@@ -80,6 +101,10 @@ export class PrinklyPrint {
     }
 
     this.timeout = timeout;
+    this.appName = appName;
+    this.tokenStore = tokenStore ?? defaultTokenStore();
+    this.pairingTimeout = pairingTimeout;
+    this.autoPair = autoPair;
     // En entornos modernos (browser, Node ≥18, Deno, Bun) `fetch` ya es global.
     // En Node ≤17 hay que pasarlo explícito (`node-fetch`, `undici`).
     const resolvedFetch = fetchImpl ?? (typeof fetch !== 'undefined' ? fetch : undefined);
@@ -153,7 +178,7 @@ export class PrinklyPrint {
    */
   async print(
     pdf: PrintablePDF,
-    req: Omit<PrintRequest, 'pdf_base64' | 'pdf_url'> = {},
+    req: Omit<PrintRequest, 'pdf_base64'> = {},
   ): Promise<PrintResponse> {
     const pdf_base64 = await toBase64(pdf);
     return this.printBase64(pdf_base64, req);
@@ -165,25 +190,9 @@ export class PrinklyPrint {
    */
   printBase64(
     pdf_base64: string,
-    req: Omit<PrintRequest, 'pdf_base64' | 'pdf_url'> = {},
+    req: Omit<PrintRequest, 'pdf_base64'> = {},
   ): Promise<PrintResponse> {
     return this.request<PrintResponse>('POST', '/print', { pdf_base64, ...req });
-  }
-
-  /**
-   * Le pide al agente que descargue el PDF desde una URL pública y luego lo
-   * imprima. La descarga ocurre **en la PC del operador** — el navegador del
-   * usuario no participa, así que es perfecta cuando el PDF ya está alojado
-   * en un servidor accesible.
-   *
-   * Si la URL requiere autenticación, mejor descargá el PDF en tu app web
-   * (con los headers correctos) y usá `print(blob)` en lugar de esto.
-   */
-  printFromUrl(
-    pdf_url: string,
-    req: Omit<PrintRequest, 'pdf_base64' | 'pdf_url'> = {},
-  ): Promise<PrintResponse> {
-    return this.request<PrintResponse>('POST', '/print', { pdf_url, ...req });
   }
 
   // ───────────────────────────────────────────────────────────────────
@@ -235,58 +244,202 @@ export class PrinklyPrint {
   }
 
   // ───────────────────────────────────────────────────────────────────
+  // Pairing / autenticación
+  // ───────────────────────────────────────────────────────────────────
+
+  /**
+   * `true` si ya hay un token cacheado para este agente (es decir, esta app ya
+   * se pareó). Útil para mostrar estado en la UI sin disparar una request.
+   */
+  isPaired(): boolean {
+    return this.tokenStore.get(this.baseUrl) !== null;
+  }
+
+  /**
+   * Se suscribe a cambios de pairing: invoca el listener cuando la librería
+   * cachea un token nuevo (`pair()` exitoso) o lo invalida ante un `401`.
+   * Devuelve una función para desuscribirse. Lo usa el hook `usePairing` de
+   * React para mantener `isPaired` sincronizado incluso cuando el pareo ocurre
+   * automáticamente desde otro método.
+   */
+  onPairingChange(listener: () => void): () => void {
+    this.pairingListeners.add(listener);
+    return () => {
+      this.pairingListeners.delete(listener);
+    };
+  }
+
+  private notifyPairingChange(): void {
+    for (const listener of this.pairingListeners) listener();
+  }
+
+  /**
+   * Hace el handshake de pairing con el agente (`POST /pair`) y cachea el token
+   * resultante para este `baseUrl`. Normalmente NO necesitás llamarla a mano:
+   * con `autoPair: true` (default) la librería paréa sola ante un `401`. Usala
+   * manualmente solo si configuraste `autoPair: false` y querés controlar la UX.
+   *
+   * Usa `pairingTimeout` (más largo que el timeout normal) porque la primera vez
+   * para un origen nuevo el agente puede mostrar un diálogo nativo y esperar a
+   * que el operador apruebe.
+   *
+   * Los pareos concurrentes se deduplican: si ya hay un `pair()` en vuelo, las
+   * llamadas simultáneas reusan la misma Promise.
+   *
+   * @returns El token obtenido (también queda cacheado en el `tokenStore`).
+   * @throws {PairingDeniedError} si el agente responde `403` (operador rechazó
+   *         o headless sin pre-aprobación).
+   * @throws {AgentUnreachableError} si el agente no está corriendo.
+   */
+  async pair(): Promise<string> {
+    // Dedupe: si ya hay un pareo en curso, reusamos su Promise.
+    if (this.pairPromise) return this.pairPromise;
+
+    const body = this.appName !== undefined ? { label: this.appName } : undefined;
+    this.pairPromise = (async () => {
+      const response = await this.doFetch('POST', '/pair', body, null, this.pairingTimeout);
+
+      if (response.status === 403) {
+        throw new PairingDeniedError(await this.parseErrorBody(response), this.baseUrl);
+      }
+      if (!response.ok) {
+        throw new AgentResponseError(response.status, await this.parseErrorBody(response));
+      }
+
+      const data = await this.parseOkJson<{ token?: string }>(response);
+      if (!data.token) {
+        throw new AgentResponseError(response.status, {
+          error: 'invalid_response',
+          message: '/pair no devolvió un token',
+        });
+      }
+      this.tokenStore.set(this.baseUrl, data.token);
+      this.notifyPairingChange();
+      return data.token;
+    })();
+
+    try {
+      return await this.pairPromise;
+    } finally {
+      this.pairPromise = null;
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────
   // Internals
   // ───────────────────────────────────────────────────────────────────
 
   /**
-   * Wrapper único de `fetch` que centraliza:
-   * - Construcción de la URL absoluta.
-   * - Serialización JSON del body.
-   * - Timeout vía `AbortController`.
-   * - Traducción de errores de red → `AgentUnreachableError`.
-   * - Traducción de status ≥ 400 → `AgentResponseError` con el body parseado.
+   * Wrapper único de `fetch` (chokepoint HTTP). Centraliza:
+   * - El header `Authorization: Bearer <token>` cuando hay token cacheado.
+   * - El flujo de re-pairing ante `401`: limpia el token, paréa UNA vez y
+   *   reintenta el request original UNA vez con el token nuevo. Si `autoPair`
+   *   es `false`, lanza `PairingRequiredError` en vez de parear.
+   * - Serialización JSON, timeout, y traducción de errores.
+   *
+   * `/ping` y `/pair` están exentos: no llevan token ni disparan auto-pairing.
+   * Esto preserva la retrocompatibilidad — contra un agente viejo que nunca
+   * devuelve `401`, nunca se intenta parear.
    *
    * Todos los demás métodos de la clase pasan por acá.
    */
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    isRetry = false,
+  ): Promise<T> {
+    const exempt = path === '/ping' || path === '/pair';
+    const token = exempt ? null : this.tokenStore.get(this.baseUrl);
+
+    const response = await this.doFetch(method, path, body, token, this.timeout);
+
+    // 401 en un endpoint sensible: el token falta, expiró o rotó en el agente.
+    if (response.status === 401 && !exempt && !isRetry) {
+      this.tokenStore.clear(this.baseUrl);
+      this.notifyPairingChange();
+      if (!this.autoPair) {
+        throw new PairingRequiredError(this.baseUrl);
+      }
+      await this.pair(); // cachea el token nuevo; lanza PairingDeniedError si 403
+      return this.request<T>(method, path, body, true); // reintento único
+    }
+
+    if (!response.ok) {
+      throw new AgentResponseError(response.status, await this.parseErrorBody(response));
+    }
+
+    // El agente devuelve siempre JSON, incluso para los endpoints "void"
+    // (los handlers de retry/cancel devuelven `{status: "..."}`).
+    return this.parseOkJson<T>(response);
+  }
+
+  /**
+   * Parsea el body de una respuesta 2xx como JSON. Si el agente (o un proxy)
+   * devuelve un body no-JSON, traduce el fallo a `AgentResponseError` para que
+   * TODA la superficie de error quede dentro de la jerarquía `PrinklyPrintError`
+   * (simétrico con parseErrorBody).
+   */
+  private async parseOkJson<T>(response: Response): Promise<T> {
+    try {
+      return (await response.json()) as T;
+    } catch {
+      throw new AgentResponseError(response.status, {
+        error: 'invalid_response',
+        message: 'el agente devolvió un body no-JSON en una respuesta 2xx',
+      });
+    }
+  }
+
+  /**
+   * Ejecuta un único `fetch` con timeout y headers (Content-Type si hay body,
+   * Authorization si hay token). Traduce errores de red/timeout pero NO
+   * interpreta el status — eso lo hace quien llama (request / pair).
+   */
+  private async doFetch(
+    method: string,
+    path: string,
+    body: unknown,
+    token: string | null,
+    timeoutMs: number,
+  ): Promise<Response> {
     const url = `${this.baseUrl}${path}`;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    let response: Response;
+    // OJO: ahora puede haber headers SIN body (Authorization sin Content-Type).
+    const headers: Record<string, string> = {};
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
     try {
-      response = await this.fetchImpl(url, {
+      return await this.fetchImpl(url, {
         method,
-        headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
     } catch (err) {
-      clearTimeout(timeoutId);
       // AbortError → timeout. Cualquier otra excepción es problema de red.
       if (err instanceof Error && err.name === 'AbortError') {
-        throw new TimeoutError(this.timeout, url);
+        throw new TimeoutError(timeoutMs, url);
       }
       throw new AgentUnreachableError(this.baseUrl, err);
     } finally {
       clearTimeout(timeoutId);
     }
+  }
 
-    if (!response.ok) {
-      // Intentamos parsear el body como {error, message}. Si el agente devolvió
-      // algo distinto (proxy intermedio, error de wine, etc.) caemos a un body
-      // genérico para no romper el .body del error.
-      let body: AgentErrorBody;
-      try {
-        body = (await response.json()) as AgentErrorBody;
-      } catch {
-        body = { error: 'invalid_response', message: response.statusText || 'sin body parseable' };
-      }
-      throw new AgentResponseError(response.status, body);
+  /**
+   * Parsea el body de una respuesta de error como `{error, message}`. Si el
+   * agente devolvió algo distinto (proxy intermedio, etc.) cae a un body
+   * genérico para no romper el `.body` del error.
+   */
+  private async parseErrorBody(response: Response): Promise<AgentErrorBody> {
+    try {
+      return (await response.json()) as AgentErrorBody;
+    } catch {
+      return { error: 'invalid_response', message: response.statusText || 'sin body parseable' };
     }
-
-    // El agente devuelve siempre JSON, incluso para los endpoints "void"
-    // (los handlers de retry/cancel devuelven `{status: "..."}`).
-    return (await response.json()) as T;
   }
 }

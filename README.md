@@ -39,6 +39,7 @@ await printer.print(blob, { filename: 'factura.pdf' });
 | | |
 |---|---|
 | 🪶  **Cero dependencias** | Solo `fetch` nativo del browser / Node ≥18. Bundle < 3 KB gzipped. |
+| 🔑  **Pairing automático** | El agente (≥1.1.0) exige un token por instalación; la librería lo obtiene sola ante un `401`, lo cachea y reintenta. Retrocompatible con agentes viejos. |
 | 🧱  **Vanilla JS friendly** | Funciona en HTML+JS puro sin bundler. **No requiere TypeScript ni framework.** Importás vía CDN y listo. |
 | 🎯  **TypeScript opcional** | Tipos incluidos en el paquete para quien los quiera usar. No hace falta instalar `@types/...` aparte. |
 | ⚛️  **Adapter React opcional** | Entry point separado `prinklyprint.js/react` con `<PrinklyPrintProvider>` + hooks `usePrint`, `useJobs`, `usePrinters`, `usePing`, `usePrinklyPrint`. |
@@ -198,6 +199,89 @@ Ver ejemplos completos:
 
 ---
 
+## 🔑 Pairing y token
+
+A partir del agente **PrinklyPrint ≥ 1.1.0**, los endpoints sensibles (`/print`, `/jobs`, `/printers`, …) exigen un **token bearer por instalación**. PrinklyPrint.js lo maneja **automáticamente** y de forma **retrocompatible**:
+
+1. Hacés tu llamada normal (`print()`, `listJobs()`, …) **sin preocuparte por el token**.
+2. Si el agente responde `401`, la librería llama a `POST /pair`, cachea el token devuelto y **reintenta** el request original con el token. Todo transparente.
+3. La **primera vez** para un origen nuevo, el agente puede mostrar un **diálogo nativo** pidiéndole al operador que autorice tu app. Por eso esa primera llamada **puede tardar** (espera la aprobación). Mostrá un estado tipo *"Esperando aprobación en PrinklyPrint…"*.
+4. Si el operador **rechaza**, obtenés un `PairingDeniedError`.
+
+Contra un **agente viejo** (que nunca devuelve `401`) no pasa nada de esto: funciona igual que siempre, sin tocar `/pair`.
+
+```ts
+const printer = new PrinklyPrint({
+  appName: 'Sistema de Facturación', // se muestra en el diálogo del agente
+});
+
+try {
+  await printer.print(blob, { filename: 'factura.pdf' }); // paréa solo si hace falta
+} catch (err) {
+  if (err instanceof PairingDeniedError) {
+    alert('Autorizá la impresión desde el ícono de PrinklyPrint y reintentá.');
+  }
+}
+```
+
+**Control manual (opcional).** Con `autoPair: false`, un `401` lanza `PairingRequiredError` en vez de parear solo, y vos disparás el handshake con tu propia UX:
+
+```ts
+const printer = new PrinklyPrint({ autoPair: false, appName: 'Mi App' });
+
+// Botón "Conectar con PrinklyPrint":
+await printer.pair();        // resuelve cuando el operador aprueba
+printer.isPaired();          // true si ya hay token cacheado
+```
+
+**Cache del token.** Por default se guarda en `localStorage` (una key por agente/URL), con fallback automático a memoria en SSR/Node o modo incógnito. Podés inyectar tu propio store con `config.tokenStore` (ej. persistir en Node):
+
+```ts
+import { PrinklyPrint, type TokenStore } from 'prinklyprint.js';
+
+const miStore: TokenStore = {
+  get: (k) => leerDeAlgunLado(k),
+  set: (k, t) => guardarEnAlgunLado(k, t),
+  clear: (k) => borrarDeAlgunLado(k),
+};
+const printer = new PrinklyPrint({ tokenStore: miStore });
+```
+
+En **React**, usá el hook `usePairing()` para un botón explícito de conexión:
+
+```tsx
+import { usePairing } from 'prinklyprint.js/react';
+
+function ConnectButton() {
+  const { pair, isLoading, error, isPaired } = usePairing();
+  if (isPaired) return <span>🟢 Conectado</span>;
+  return (
+    <button onClick={() => pair().catch(() => {})} disabled={isLoading}>
+      {isLoading ? 'Esperando aprobación…' : 'Conectar con PrinklyPrint'}
+    </button>
+  );
+}
+```
+
+---
+
+## 🔒 Seguridad
+
+PrinklyPrint.js es un **cliente delgado**: la autenticación y autorización las
+impone el **agente** (token Bearer por instalación + pairing con consentimiento
+del operador), no la librería. La librería solo cachea el token por instalación
+de agente (storage del navegador) y lo manda en `Authorization`, y no hace
+conexiones salientes propias más allá del loopback del agente.
+
+El flujo de token y pairing está descripto en detalle en la sección
+[Pairing y token](#-pairing-y-token) y, del lado del agente, en el README de
+[PrinklyPrint](https://github.com/LautaroTiamat/PrinklyPrint).
+
+Política de divulgación responsable, versiones soportadas y el resumen completo
+de la postura de seguridad: [`SECURITY.md`](SECURITY.md).
+
+---
+
 ## 📖 API Reference
 
 ### `new PrinklyPrint(config?)`
@@ -209,6 +293,10 @@ Ver ejemplos completos:
 | `baseUrl` | `string` | — | Override completo (ignora host/port). |
 | `timeout` | `number` | `30000` | Timeout HTTP en ms. |
 | `fetch` | `typeof fetch` | global | Inyectable (para Node ≤17 o tests). |
+| `appName` | `string` | — | Etiqueta que el agente muestra en el diálogo de aprobación de pairing. |
+| `tokenStore` | `TokenStore` | localStorage / memoria | Cache del token (uno por `baseUrl`). |
+| `pairingTimeout` | `number` | `120000` | Timeout para `POST /pair` (más largo: espera la aprobación del operador). |
+| `autoPair` | `boolean` | `true` | Si es `false`, un `401` lanza `PairingRequiredError` en vez de parear solo. |
 
 ### Métodos del cliente
 
@@ -219,11 +307,12 @@ Ver ejemplos completos:
 | `getSettings()` | `AgentSettings` | Defaults de impresión configurados por el operador. |
 | `print(pdf, req?)` | `PrintResponse` | Imprime cualquier `Blob`/`File`/`ArrayBuffer`/base64. |
 | `printBase64(b64, req?)` | `PrintResponse` | Cuando ya tenés el PDF en base64. |
-| `printFromUrl(url, req?)` | `PrintResponse` | El agente descarga la URL y luego imprime. |
 | `listJobs(filter?)` | `ListJobsResponse` | Lista jobs (filtros: `status`, `limit`, `offset`). |
 | `getJob(id)` | `Job` | Detalle de un job, incluyendo `last_error` y `sumatra_log`. |
 | `retryJob(id)` | `{status}` | Reencola un job `failed`. |
 | `cancelJob(id)` | `{status}` | Cancela un job `queued`. |
+| `pair()` | `string` | Handshake de pairing manual; cachea y devuelve el token. Normalmente no hace falta llamarlo (auto-pairing). |
+| `isPaired()` | `boolean` | `true` si ya hay token cacheado para este agente. |
 
 ### Hooks de React (`prinklyprint.js/react`)
 
@@ -235,6 +324,7 @@ Ver ejemplos completos:
 | `usePrinters(opts?)` | `QueryState<Printer[]>` | Lista impresoras con polling opcional. |
 | `useJobs(filter?, opts?)` | `QueryState<ListJobsResponse>` | Lista jobs (default: polling 3s). |
 | `usePrint()` | `PrintMutationState` | Mutación con `{print, isLoading, error, data, reset}`. |
+| `usePairing()` | `PairingState` | Pairing manual: `{pair, isLoading, error, isPaired}`. |
 
 Todos los hooks de lectura devuelven la misma shape:
 
@@ -250,6 +340,19 @@ import {
   AgentUnreachableError,  // agente no instalado o apagado
   AgentResponseError,     // 4xx/5xx — leé .status y .body.error
   TimeoutError,           // request superó .timeout
+  PairingDeniedError,     // el operador/agente rechazó el pairing (403)
+  PairingRequiredError,   // solo con autoPair:false — hace falta llamar a pair()
+} from 'prinklyprint.js';
+```
+
+Cache del token (enchufable):
+
+```ts
+import {
+  type TokenStore,         // interfaz { get, set, clear }
+  MemoryTokenStore,        // store en memoria (fallback / Node)
+  LocalStorageTokenStore,  // store en localStorage (browser, default)
+  defaultTokenStore,       // elige el mejor disponible según el entorno
 } from 'prinklyprint.js';
 ```
 
@@ -309,11 +412,20 @@ npx serve .
 **¿Necesito instalar algo más en la PC del usuario?**
 Sí: el [agente PrinklyPrint](https://github.com/LautaroTiamat/PrinklyPrint/releases/latest/download/PrinklyPrint-Setup.exe). Esta librería es solo el cliente HTTP — el trabajo real lo hace el agente local.
 
+**¿Tengo que manejar el token / pairing a mano?**
+No. Con la config por default la librería paréa sola la primera vez que tu app llama a un endpoint sensible (ante un `401`), cachea el token y reintenta. Solo necesitás encargarte vos si: (a) querés un botón explícito de conexión (`pair()` / `usePairing()`), (b) usás `autoPair: false`, o (c) querés capturar `PairingDeniedError` para mostrar "autorizá desde el ícono de PrinklyPrint". Ver la sección [Pairing y token](#-pairing-y-token).
+
+**La primera impresión tarda o "se cuelga" un rato, ¿es normal?**
+Sí: la primera vez para un origen nuevo, el agente muestra un diálogo nativo pidiéndole al operador que autorice tu app, y la llamada espera esa decisión (hasta `pairingTimeout`, default 2 min). Mostrá un estado *"Esperando aprobación en PrinklyPrint…"*. Las llamadas siguientes usan el token cacheado y son inmediatas.
+
 **¿Funciona con `fetch` desde `https://`?**
-Sí. El agente acepta conexiones desde orígenes `https://` siempre que estén en la whitelist CORS configurada. Los browsers permiten `https → http://127.0.0.1` para loopback sin marcarlo como mixed content.
+Sí. Los browsers permiten `https → http://127.0.0.1` (loopback) sin marcarlo como mixed content. El agente acepta requests de cualquier origen a nivel CORS; el control de acceso es el **token + el diálogo de aprobación** (no una whitelist de CORS), así que la primera vez tu sitio tiene que aprobarse en el agente (la lib lo hace automático ante el `401`).
 
 **¿Puedo enviar otros formatos además de PDF?**
 No. El agente usa SumatraPDF internamente, que solo procesa PDF. Si necesitás imprimir imágenes u otros formatos, convertilos a PDF en tu app antes de mandarlos.
+
+**¿Qué pasó con `printFromUrl()` / mandar una URL para que el agente la descargue?**
+Se **eliminó en la v2** por seguridad. Que el agente descargara una URL arbitraria era una superficie de **SSRF** (el agente podía ser inducido a pedir recursos internos de la red), y no había un caso de uso que no se cubriera mejor desde tu app. Ahora el PDF **siempre va inline**: generalo u obtenelo en tu aplicación (`fetch(url).then(r => r.blob())`, tu backend, etc.) y mandalo con `print(blob)` o `printBase64(b64)`. El agente ya no hace ninguna conexión saliente de red.
 
 **¿Cómo manejo el caso donde el agente no está instalado?**
 Catcheá `AgentUnreachableError` en tu primer `ping()` o `print()`. Mostrale al usuario un link directo al instalador: `https://github.com/LautaroTiamat/PrinklyPrint/releases/latest/download/PrinklyPrint-Setup.exe`.
