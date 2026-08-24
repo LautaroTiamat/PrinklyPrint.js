@@ -37,13 +37,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Node 22 LTS: npm@latest (12.x) exige node ^22.22 — con Node 20 el
+          # upgrade de npm fallaba con EBADENGINE y el publish nunca corría
+          # (así se rompió el release de v2.2.0 hasta este fix).
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
-      # Node 20 LTS viene con npm 10.x. OIDC Trusted Publishing requiere
-      # npm 11.5.1+ (la integración con GitHub OIDC se agregó ahí).
-      # Forzamos la última versión estable.
+      # OIDC Trusted Publishing requiere npm 11.5.1+ (la integración con
+      # GitHub OIDC se agregó ahí). Forzamos la última versión estable.
       - name: Upgrade npm to support OIDC trusted publishing
         run: npm install -g npm@latest
 
