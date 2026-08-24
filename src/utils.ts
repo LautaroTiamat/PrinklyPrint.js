@@ -6,14 +6,18 @@
  * @internal
  */
 
+import { PrinklyPrintError } from './errors.js';
 import type { PrintablePDF } from './types.js';
 
 /**
  * Convierte cualquier `PrintablePDF` a un string base64 puro (sin el prefijo
  * `data:application/pdf;base64,`).
  *
- * - Si ya es un string, lo devuelve tal cual (asume que es base64 válido). Si
- *   detecta el prefijo `data:` lo recorta automáticamente.
+ * - Si ya es un string, valida que sea base64 (tolerando saltos de línea y
+ *   espacios, que descarta). Si detecta el prefijo `data:` lo recorta
+ *   automáticamente. Un string que no es base64 (por ejemplo, el binario del
+ *   PDF pasado como string) tira `PrinklyPrintError` acá, del lado del
+ *   cliente, en vez de viajar corrupto al agente.
  * - Si es un `Blob` / `File`, lo lee con `FileReader` y le saca el prefijo.
  * - Si es un `ArrayBuffer` / `Uint8Array`, lo convierte byte a byte.
  *
@@ -25,10 +29,16 @@ export async function toBase64(input: PrintablePDF): Promise<string> {
   if (typeof input === 'string') {
     // Soporta data URLs: 'data:application/pdf;base64,JVBERi0...'
     const commaIdx = input.indexOf(',');
-    if (input.startsWith('data:') && commaIdx !== -1) {
-      return input.slice(commaIdx + 1);
+    const raw =
+      input.startsWith('data:') && commaIdx !== -1 ? input.slice(commaIdx + 1) : input;
+    // Tolera whitespace (base64 copiado con saltos de línea) y valida el resto.
+    const cleaned = raw.replace(/\s+/g, '');
+    if (cleaned === '' || !/^[A-Za-z0-9+/]+={0,2}$/.test(cleaned) || cleaned.length % 4 !== 0) {
+      throw new PrinklyPrintError(
+        'El string recibido no es base64 válido. Si tenés el PDF como binario, pasalo como Blob, ArrayBuffer o Uint8Array y la librería lo convierte por vos.',
+      );
     }
-    return input;
+    return cleaned;
   }
 
   if (input instanceof ArrayBuffer) {
@@ -92,10 +102,18 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
  * Pequeño helper para validar que `host` no incluya scheme ni path. El
  * constructor del cliente arma la URL `http://${host}:${port}` así que si
  * pasás `http://localhost` por accidente, la URL queda mal formada.
+ *
+ * Una IPv6 literal (`::1`, `fe80::1`) se envuelve en corchetes — sin ellos,
+ * `http://::1:17777` es una URL inválida.
  */
 export function normalizeHost(host: string): string {
-  return host
+  const h = host
     .trim()
     .replace(/^https?:\/\//, '')
     .replace(/\/$/, '');
+  // IPv6 literal sin corchetes: solo dígitos hex y ':' con al menos un ':'.
+  if (!h.startsWith('[') && h.includes(':') && /^[0-9a-fA-F:]+$/.test(h)) {
+    return `[${h}]`;
+  }
+  return h;
 }

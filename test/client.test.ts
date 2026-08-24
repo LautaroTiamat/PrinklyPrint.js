@@ -25,7 +25,7 @@ function makeFetch(handler: (path: string, call: Call) => Response) {
     const url = new URL(String(input));
     const headersIn = (init.headers ?? {}) as Record<string, string>;
     const lower: Record<string, string> = {};
-    for (const k of Object.keys(headersIn)) lower[k.toLowerCase()] = headersIn[k];
+    for (const [k, v] of Object.entries(headersIn)) lower[k.toLowerCase()] = v;
     const call: Call = {
       path: url.pathname,
       method: init.method ?? 'GET',

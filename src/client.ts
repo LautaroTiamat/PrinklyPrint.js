@@ -29,7 +29,6 @@ import type {
   ListJobsResponse,
   PingResponse,
   PrintablePDF,
-  PrintOptions,
   PrintRequest,
   PrintResponse,
   Printer,

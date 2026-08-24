@@ -1,6 +1,6 @@
 {
   "name": "prinklyprint.js",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Cliente JavaScript/TypeScript oficial del agente PrinklyPrint. Imprimí PDFs desde tu web sin diálogos del navegador. Soporte para vanilla JS, React y TypeScript.",
   "keywords": [
     "printing",
@@ -50,7 +50,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "test:watch": "vitest",
     "prepublishOnly": "npm run typecheck && npm run build"
   },
@@ -63,9 +63,12 @@
     }
   },
   "devDependencies": {
+    "@testing-library/react": "^14.3.1",
     "@types/node": "^20.11.0",
     "@types/react": "^18.2.0",
+    "jsdom": "^24.1.3",
     "react": "^18.2.0",
+    "react-dom": "^18.3.1",
     "tsup": "^8.0.1",
     "typescript": "^5.3.3",
     "vitest": "^1.2.0"

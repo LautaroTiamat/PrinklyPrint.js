@@ -12,6 +12,7 @@
 import { useState } from 'react';
 import {
   PrinklyPrintProvider,
+  useJobActions,
   useJobs,
   usePairing,
   usePing,
@@ -151,9 +152,10 @@ function PrintForm() {
   );
 }
 
-// ─── 5) Cola en vivo con polling cada 3s ────────────────────────────
+// ─── 5) Cola en vivo con polling cada 3s + reintentar/cancelar ──────
 function QueueMonitor() {
   const { data, isLoading, refresh } = useJobs({ limit: 20 }, { pollInterval: 3000 });
+  const { retryJob, cancelJob, isLoading: acting, error: actionError } = useJobActions();
 
   return (
     <section>
@@ -161,6 +163,7 @@ function QueueMonitor() {
       <button onClick={refresh} disabled={isLoading}>
         Refrescar manualmente
       </button>
+      {actionError && <p style={{ color: 'red' }}>{actionError.message}</p>}
       {data?.jobs.length === 0 && <p>Sin jobs.</p>}
       <table style={{ width: '100%', marginTop: '1rem', borderCollapse: 'collapse' }}>
         <thead>
@@ -169,6 +172,7 @@ function QueueMonitor() {
             <th style={cellStyle}>Impresora</th>
             <th style={cellStyle}>Estado</th>
             <th style={cellStyle}>Intentos</th>
+            <th style={cellStyle}>Acciones</th>
           </tr>
         </thead>
         <tbody>
@@ -178,6 +182,18 @@ function QueueMonitor() {
               <td style={cellStyle}>{j.printer || '(default)'}</td>
               <td style={cellStyle}>{j.status}</td>
               <td style={cellStyle}>{j.attempts}</td>
+              <td style={cellStyle}>
+                {j.status === 'failed' && (
+                  <button disabled={acting} onClick={() => retryJob(j.id).then(refresh)}>
+                    ↻ Reintentar
+                  </button>
+                )}
+                {j.status === 'queued' && (
+                  <button disabled={acting} onClick={() => cancelJob(j.id).then(refresh)}>
+                    ✕ Cancelar
+                  </button>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>

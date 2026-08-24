@@ -38,11 +38,11 @@ await printer.print(blob, { filename: 'factura.pdf' });
 
 | | |
 |---|---|
-| 🪶  **Cero dependencias** | Solo `fetch` nativo del browser / Node ≥18. Bundle < 3 KB gzipped. |
+| 🪶  **Cero dependencias** | Solo `fetch` nativo del browser / Node ≥18. Bundle core ~6 KB gzipped (sin minificar). |
 | 🔑  **Pairing automático** | El agente (≥1.1.0) exige un token por instalación; la librería lo obtiene sola ante un `401`, lo cachea y reintenta. Retrocompatible con agentes viejos. |
 | 🧱  **Vanilla JS friendly** | Funciona en HTML+JS puro sin bundler. **No requiere TypeScript ni framework.** Importás vía CDN y listo. |
 | 🎯  **TypeScript opcional** | Tipos incluidos en el paquete para quien los quiera usar. No hace falta instalar `@types/...` aparte. |
-| ⚛️  **Adapter React opcional** | Entry point separado `prinklyprint.js/react` con `<PrinklyPrintProvider>` + hooks `usePrint`, `useJobs`, `usePrinters`, `usePing`, `usePrinklyPrint`. |
+| ⚛️  **Adapter React opcional** | Entry point separado `prinklyprint.js/react` con `<PrinklyPrintProvider>` + hooks `usePrint`, `useJobs`, `useJob`, `useJobActions`, `useSettings`, `usePrinters`, `usePing`, `usePairing`, `usePrinklyPrint`. |
 | 🔄  **Conversión automática** | Pasale `Blob`, `File`, `ArrayBuffer`, `Uint8Array` o base64. La librería resuelve. |
 | 🚨  **Errores tipados** | `AgentUnreachableError`, `AgentResponseError`, `TimeoutError` con discriminación por `instanceof`. |
 | ⏱️  **Timeout configurable** | Default 30s, ajustable por instancia. Cancela con `AbortController`. |
@@ -154,7 +154,7 @@ Si no usás bundler (Vite, webpack, etc.) e ingresás la librería directo en un
 
   <script type="module">
     // Opción 1: esm.sh (recomendado para módulos ESM modernos)
-    import { PrinklyPrint } from 'https://esm.sh/prinklyprint.js@1';
+    import { PrinklyPrint } from 'https://esm.sh/prinklyprint.js@2';
 
     const printer = new PrinklyPrint();
 
@@ -171,11 +171,11 @@ Si no usás bundler (Vite, webpack, etc.) e ingresás la librería directo en un
 
 | CDN | URL | Cuándo usarlo |
 |-----|-----|---------------|
-| **esm.sh** | `https://esm.sh/prinklyprint.js@1` | Default recomendado. Optimiza el bundle para browsers modernos. |
-| **jsDelivr** | `https://cdn.jsdelivr.net/npm/prinklyprint.js@1/+esm` | Si esm.sh está caído, o si preferís un CDN con mirrors globales. |
-| **unpkg** | `https://unpkg.com/prinklyprint.js@1` | Alternativa clásica, sirve el contenido del paquete tal cual está en npm. |
+| **esm.sh** | `https://esm.sh/prinklyprint.js@2` | Default recomendado. Optimiza el bundle para browsers modernos. |
+| **jsDelivr** | `https://cdn.jsdelivr.net/npm/prinklyprint.js@2/+esm` | Si esm.sh está caído, o si preferís un CDN con mirrors globales. |
+| **unpkg** | `https://unpkg.com/prinklyprint.js@2` | Alternativa clásica, sirve el contenido del paquete tal cual está en npm. |
 
-Pineá una versión específica (`@1.0.0`) en producción para builds reproducibles; usá `@1` solo para prototipos rápidos donde no te importa si una versión menor cambia.
+Pineá una versión específica (`@2.2.0`) en producción para builds reproducibles; usá `@2` solo para prototipos rápidos donde no te importa si una versión menor cambia. **No uses `@1`**: la major 1 tiene la API vieja con `printFromUrl`, eliminada en la v2 por superficie SSRF.
 
 #### ¿Sin instalar TypeScript ni React?
 
@@ -183,7 +183,7 @@ Cero. Estos snippets corren en cualquier navegador moderno sin nada extra:
 
 ```html
 <script type="module">
-  import { PrinklyPrint } from 'https://esm.sh/prinklyprint.js@1';
+  import { PrinklyPrint } from 'https://esm.sh/prinklyprint.js@2';
 
   // jQuery, Vue, Alpine, Svelte, Angular, vanilla — da igual.
   // Esto es solamente HTML + JS y funciona idéntico.
@@ -313,6 +313,7 @@ de la postura de seguridad: [`SECURITY.md`](SECURITY.md).
 | `cancelJob(id)` | `{status}` | Cancela un job `queued`. |
 | `pair()` | `string` | Handshake de pairing manual; cachea y devuelve el token. Normalmente no hace falta llamarlo (auto-pairing). |
 | `isPaired()` | `boolean` | `true` si ya hay token cacheado para este agente. |
+| `onPairingChange(listener)` | `() => void` | Suscribe un listener a cambios de pairing (token obtenido/limpiado); devuelve la función para desuscribirse. |
 
 ### Hooks de React (`prinklyprint.js/react`)
 
@@ -323,7 +324,10 @@ de la postura de seguridad: [`SECURITY.md`](SECURITY.md).
 | `usePing(opts?)` | `QueryState<PingResponse>` | Healthcheck con polling opcional. |
 | `usePrinters(opts?)` | `QueryState<Printer[]>` | Lista impresoras con polling opcional. |
 | `useJobs(filter?, opts?)` | `QueryState<ListJobsResponse>` | Lista jobs (default: polling 3s). |
+| `useJob(id, opts?)` | `QueryState<Job>` | Detalle de un job. Con `id` null/undefined queda deshabilitado. |
+| `useSettings(opts?)` | `QueryState<AgentSettings>` | Defaults de impresión del agente (incluye `machine_id`). |
 | `usePrint()` | `PrintMutationState` | Mutación con `{print, isLoading, error, data, reset}`. |
+| `useJobActions()` | `JobActionsState` | Acciones de cola: `{retryJob, cancelJob, isLoading, error, reset}`. |
 | `usePairing()` | `PairingState` | Pairing manual: `{pair, isLoading, error, isPaired}`. |
 
 Todos los hooks de lectura devuelven la misma shape:

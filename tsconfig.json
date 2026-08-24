@@ -18,9 +18,11 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "outDir": "dist",
-    "rootDir": "src"
+    "outDir": "dist"
   },
-  "include": ["src/**/*"],
+  // test/ está incluido a propósito: `npm run typecheck` valida también los
+  // tests (los `satisfies` del contract test dependen de esto). tsup compila
+  // solo desde sus entries (src/), así que esto no afecta el build.
+  "include": ["src/**/*", "test/**/*"],
   "exclude": ["node_modules", "dist", "examples"]
 }

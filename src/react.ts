@@ -5,10 +5,11 @@
  *
  * - `PrinklyPrintProvider` — context que comparte una instancia del cliente
  *   con todo el árbol. Evita instanciar `PrinklyPrint` en cada componente.
- * - Hooks de **lectura** (`usePing`, `usePrinters`, `useJobs`) — devuelven
- *   `{data, error, isLoading, refresh}` y soportan polling configurable.
- * - Hook de **acción** (`usePrint`) — devuelve `{print, isLoading, error, data}`
- *   y maneja el estado de la mutación.
+ * - Hooks de **lectura** (`usePing`, `usePrinters`, `useJobs`, `useJob`,
+ *   `useSettings`) — devuelven `{data, error, isLoading, refresh}` y soportan
+ *   polling configurable.
+ * - Hooks de **acción** (`usePrint`, `useJobActions`) — manejan el estado de la
+ *   mutación (`isLoading`, `error`, `data`/`reset`).
  * - Hook de **pairing** (`usePairing`) — devuelve `{pair, isLoading, error, isPaired}`
  *   para autorizar la app contra el agente con tu propia UX.
  *
@@ -79,6 +80,9 @@ import {
 import { PrinklyPrint } from './client.js';
 import { PrinklyPrintError } from './errors.js';
 import type {
+  AgentSettings,
+  Job,
+  JobStatus,
   ListJobsFilter,
   ListJobsResponse,
   PingResponse,
@@ -194,6 +198,11 @@ export interface QueryOptions {
  * Hook helper que NO está exportado al público — se usa internamente por los
  * hooks específicos para evitar duplicar la mecánica de polling + manejo de
  * unmount + race conditions.
+ *
+ * IMPORTANTE: `fetcher` debe estar memoizado por el caller (`useCallback` con
+ * el cliente y sus parámetros como deps). Su identidad participa de las deps
+ * del efecto: cuando cambia (nuevo cliente, nuevo filtro) se dispara un fetch
+ * inmediato, sin esperar al próximo tick de polling.
  */
 function useQuery<T>(fetcher: () => Promise<T>, options: QueryOptions = {}): QueryState<T> {
   const { pollInterval = 0, enabled = true } = options;
@@ -211,25 +220,40 @@ function useQuery<T>(fetcher: () => Promise<T>, options: QueryOptions = {}): Que
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
 
+  // Id incremental por llamada: si mientras una request está en vuelo se
+  // disparó otra (cambio de filtro/cliente, refresh manual), la respuesta
+  // vieja se descarta — solo la última llamada escribe estado.
+  const callIdRef = useRef(0);
+
   const refresh = useCallback(async () => {
     if (!aliveRef.current) return;
+    const callId = ++callIdRef.current;
     setIsLoading(true);
     try {
       const result = await fetcherRef.current();
-      if (!aliveRef.current) return;
+      if (!aliveRef.current || callId !== callIdRef.current) return;
       setData(result);
       setError(null);
     } catch (err) {
-      if (!aliveRef.current) return;
+      if (!aliveRef.current || callId !== callIdRef.current) return;
       setError(err instanceof Error ? err : new Error(String(err)));
     } finally {
-      if (aliveRef.current) setIsLoading(false);
+      if (aliveRef.current && callId === callIdRef.current) setIsLoading(false);
     }
   }, []);
 
+  // `fetcher` está en las deps a propósito: un fetcher nuevo (cliente o filtro
+  // distinto) re-dispara el fetch inmediato. `refresh` es estable (lee refs).
   useEffect(() => {
     aliveRef.current = true;
-    if (!enabled) return;
+    if (!enabled) {
+      // Aun deshabilitado registramos cleanup: si no, aliveRef quedaba en true
+      // tras el unmount y un refresh() manual en vuelo podía hacer setState
+      // sobre un componente desmontado.
+      return () => {
+        aliveRef.current = false;
+      };
+    }
 
     void refresh();
 
@@ -244,7 +268,7 @@ function useQuery<T>(fetcher: () => Promise<T>, options: QueryOptions = {}): Que
     return () => {
       aliveRef.current = false;
     };
-  }, [enabled, pollInterval, refresh]);
+  }, [enabled, pollInterval, fetcher, refresh]);
 
   return { data, error, isLoading, refresh };
 }
@@ -269,7 +293,8 @@ function useQuery<T>(fetcher: () => Promise<T>, options: QueryOptions = {}): Que
  */
 export function usePing(options?: QueryOptions): QueryState<PingResponse> {
   const client = usePrinklyPrint();
-  return useQuery(() => client.ping(), options);
+  const fetcher = useCallback(() => client.ping(), [client]);
+  return useQuery(fetcher, options);
 }
 
 /**
@@ -278,7 +303,8 @@ export function usePing(options?: QueryOptions): QueryState<PingResponse> {
  */
 export function usePrinters(options?: QueryOptions): QueryState<Printer[]> {
   const client = usePrinklyPrint();
-  return useQuery(() => client.listPrinters(), options);
+  const fetcher = useCallback(() => client.listPrinters(), [client]);
+  return useQuery(fetcher, options);
 }
 
 /**
@@ -295,10 +321,49 @@ export function useJobs(
   const client = usePrinklyPrint();
   const { pollInterval = 3000 } = options;
   // Estabilizar la dependencia de filter para que el callback no se recree
-  // en cada render salvo que el filtro cambie efectivamente.
+  // en cada render salvo que el filtro cambie efectivamente. Cuando cambia
+  // (o cambia el cliente), useQuery dispara un fetch inmediato.
   const filterKey = JSON.stringify(filter);
   const fetcher = useCallback(() => client.listJobs(filter), [client, filterKey]);
   return useQuery(fetcher, { ...options, pollInterval });
+}
+
+/**
+ * Defaults de impresión configurados por el operador en el agente
+ * (`GET /settings`). Incluye `machine_id`. Útil para inicializar formularios
+ * de impresión con los mismos valores que ve el operador.
+ */
+export function useSettings(options?: QueryOptions): QueryState<AgentSettings> {
+  const client = usePrinklyPrint();
+  const fetcher = useCallback(() => client.getSettings(), [client]);
+  return useQuery(fetcher, options);
+}
+
+/**
+ * Detalle de un job por id (`GET /jobs/{id}`), incluyendo `last_error` y
+ * `sumatra_log`. Pasá `null`/`undefined` mientras no haya job seleccionado:
+ * el hook queda deshabilitado y no hace ninguna request.
+ *
+ * @example
+ * ```tsx
+ * function JobDetail({ id }: { id: string | null }) {
+ *   const { data, error } = useJob(id, { pollInterval: 2000 });
+ *   if (!id) return null;
+ *   if (error) return <p>{error.message}</p>;
+ *   return <pre>{data?.last_error || data?.status}</pre>;
+ * }
+ * ```
+ */
+export function useJob(
+  id: string | null | undefined,
+  options: QueryOptions = {},
+): QueryState<Job> {
+  const client = usePrinklyPrint();
+  const fetcher = useCallback(() => client.getJob(id ?? ''), [client, id]);
+  return useQuery(fetcher, {
+    ...options,
+    enabled: (options.enabled ?? true) && id != null && id !== '',
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -394,6 +459,91 @@ export function usePrint(): PrintMutationState {
   }, []);
 
   return { print, isLoading, data, error, reset };
+}
+
+/** Estado del hook `useJobActions`. */
+export interface JobActionsState {
+  /** Reencola un job `failed` (`POST /jobs/{id}/retry`). */
+  retryJob: (id: string) => Promise<{ status: JobStatus }>;
+  /** Cancela un job `queued` (`DELETE /jobs/{id}`). */
+  cancelJob: (id: string) => Promise<{ status: JobStatus }>;
+  /** `true` mientras alguna acción está en vuelo. */
+  isLoading: boolean;
+  /** Último error (queda persistido hasta la próxima acción exitosa o `reset`). */
+  error: Error | null;
+  /** Limpia `error` sin disparar ninguna acción. */
+  reset: () => void;
+}
+
+/**
+ * Acciones sobre jobs de la cola, con manejo de estado pensado para la
+ * botonera de un dashboard (reintentar un job fallido, cancelar uno en cola).
+ * Complementa a `useJobs`: después de una acción, llamá al `refresh` del
+ * listado (o dejá que el próximo tick de polling lo refleje).
+ *
+ * @example
+ * ```tsx
+ * function JobRow({ job, refresh }: { job: Job; refresh: () => void }) {
+ *   const { retryJob, cancelJob, isLoading, error } = useJobActions();
+ *   return (
+ *     <tr>
+ *       <td>{job.filename}</td>
+ *       <td>{job.status}</td>
+ *       <td>
+ *         {job.status === 'failed' && (
+ *           <button disabled={isLoading} onClick={() => retryJob(job.id).then(refresh)}>
+ *             Reintentar
+ *           </button>
+ *         )}
+ *         {job.status === 'queued' && (
+ *           <button disabled={isLoading} onClick={() => cancelJob(job.id).then(refresh)}>
+ *             Cancelar
+ *           </button>
+ *         )}
+ *         {error && <span>{error.message}</span>}
+ *       </td>
+ *     </tr>
+ *   );
+ * }
+ * ```
+ */
+export function useJobActions(): JobActionsState {
+  const client = usePrinklyPrint();
+  const [error, setError] = useState<Error | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const aliveRef = useRef(true);
+
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
+  const run = useCallback(
+    async (action: () => Promise<{ status: JobStatus }>) => {
+      setIsLoading(true);
+      try {
+        const result = await action();
+        if (aliveRef.current) setError(null);
+        return result;
+      } catch (err) {
+        const e = err instanceof Error ? err : new Error(String(err));
+        if (aliveRef.current) setError(e);
+        // Re-lanzamos para que el caller pueda await y manejar el error.
+        throw e;
+      } finally {
+        if (aliveRef.current) setIsLoading(false);
+      }
+    },
+    [],
+  );
+
+  const retryJob = useCallback((id: string) => run(() => client.retryJob(id)), [client, run]);
+  const cancelJob = useCallback((id: string) => run(() => client.cancelJob(id)), [client, run]);
+  const reset = useCallback(() => setError(null), []);
+
+  return { retryJob, cancelJob, isLoading, error, reset };
 }
 
 // ─────────────────────────────────────────────────────────────────────

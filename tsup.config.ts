@@ -12,7 +12,10 @@ export default defineConfig({
   },
   format: ['esm', 'cjs'],
   dts: true,
-  sourcemap: true,
+  // Sin sourcemaps en el paquete publicado: embebían todo src/ vía
+  // sourcesContent y duplicaban el peso del tarball. El código fuente está
+  // público en GitHub para quien necesite debuggear.
+  sourcemap: false,
   clean: true,
   splitting: false,
   treeshake: true,

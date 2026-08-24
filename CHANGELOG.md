@@ -2,6 +2,56 @@
 
 Todas las versiones notables de PrinklyPrint.js quedan documentadas acá. Formato basado en [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el proyecto sigue [Semantic Versioning](https://semver.org/lang/es/).
 
+## [2.2.0] — 2026-08-24
+
+### Agregado
+- **Hooks React nuevos**: `useSettings()` (defaults del agente + `machine_id`),
+  `useJob(id)` (detalle de un job; deshabilitado con `id` null) y
+  `useJobActions()` (`{retryJob, cancelJob, isLoading, error, reset}`) — un
+  dashboard de cola ya no tiene que bajar a `usePrinklyPrint()` para reintentar
+  o cancelar. El ejemplo `examples/react.tsx` muestra la botonera.
+- **Contract test Go↔TS** (`test/contract.test.ts` + `test/contract/api-shapes.json`):
+  la forma real del API del agente (generada por su suite Go) se valida contra
+  los tipos de `src/types.ts` vía samples `satisfies`. El drift de tipos (como
+  el traslado de `machine_id` de `/ping` a `/settings`) ahora rompe un test.
+- **Tests de hooks React** (`test/react.test.tsx`, con jsdom + Testing Library)
+  y **de los métodos del cliente** sin cobertura (`test/methods.test.ts`:
+  jobs/settings/printers, timeout → `TimeoutError`, red → `AgentUnreachableError`,
+  body no-JSON y 4xx → `AgentResponseError`).
+
+### Cambiado
+- `npm run typecheck` ahora incluye `test/` (necesario para que los `satisfies`
+  del contract test validen en compilación).
+
+### Corregido
+- **Los hooks de lectura de React re-fetchean al cambiar el filtro o el cliente.**
+  Antes, cambiar el `filter` de `useJobs` (o el `port`/`config` del Provider) no
+  disparaba un fetch inmediato: los datos nuevos recién llegaban en el próximo
+  tick de polling, o nunca con `pollInterval: 0`. Ahora el fetcher participa de
+  las dependencias del efecto y el cambio re-fetchea al instante, como prometía
+  la documentación del `PrinklyPrintProvider`.
+- **Respuestas viejas ya no pisan a las nuevas en los hooks de lectura**: si una
+  request quedó en vuelo cuando se disparó otra (cambio de filtro, `refresh()`
+  manual), la respuesta obsoleta se descarta.
+- **Fuga de `aliveRef` con `enabled: false`**: el efecto de los hooks de lectura
+  no registraba cleanup cuando estaba deshabilitado, y un `refresh()` manual en
+  vuelo podía hacer `setState` sobre un componente desmontado.
+- **`toBase64` valida los strings**: un string que no es base64 (por ejemplo el
+  binario del PDF pasado como string) ahora tira `PrinklyPrintError` del lado
+  del cliente en vez de viajar corrupto al agente. También tolera y limpia
+  whitespace (base64 copiado con saltos de línea).
+- **`normalizeHost` soporta IPv6**: una IPv6 literal (`::1`) se envuelve en
+  corchetes para que la base URL sea válida.
+
+### Cambiado
+- **El paquete npm ya no incluye sourcemaps**: embebían todo `src/` vía
+  `sourcesContent` y duplicaban el peso del tarball. El código fuente está
+  público en GitHub.
+- README: los ejemplos de CDN apuntan a la major 2 (los de `@1` instalaban la
+  API vieja con `printFromUrl`, eliminada por SSRF), se documentó
+  `onPairingChange()` en la tabla de métodos y se corrigió el tamaño de bundle
+  declarado (~6 KB gzip sin minificar).
+
 ## [2.1.0] — 2026-06-29
 
 ### Corregido
